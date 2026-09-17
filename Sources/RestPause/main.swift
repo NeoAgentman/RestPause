@@ -39,6 +39,7 @@ struct RestMessage: Equatable {
     @Published var remaining = 0
     @Published var message = RestMessage.all[0]
     @Published var keepingAwake = false
+    @Published var emergencyUnlockDisabled = false
     var escape: () -> Void = {}
 
     func chooseMessage() {
@@ -61,12 +62,14 @@ struct RestView: View {
                     .multilineTextAlignment(.center)
                 Text(model.keepingAwake ? "电脑保持运行，任务继续进行" : "任务继续进行；系统仍按原有电源设置运行")
                     .font(.system(size: 13)).foregroundStyle(.white.opacity(0.4)).padding(.top, 14)
-                Text(holding ? "继续按住以紧急解除…" : "紧急解除 · 按住 3 秒")
-                    .font(.system(size: 13)).padding(.horizontal, 22).padding(.vertical, 12)
-                    .background(.white.opacity(holding ? 0.18 : 0.07), in: Capsule())
-                    .contentShape(Capsule())
-                    .onLongPressGesture(minimumDuration: 3, maximumDistance: 35, pressing: { holding = $0 }, perform: { model.escape() })
-                    .accessibilityLabel("紧急解除，按住三秒；也可同时按住 Control Option Command Escape 三秒")
+                if !model.emergencyUnlockDisabled {
+                    Text(holding ? "继续按住以紧急解除…" : "紧急解除 · 按住 3 秒")
+                        .font(.system(size: 13)).padding(.horizontal, 22).padding(.vertical, 12)
+                        .background(.white.opacity(holding ? 0.18 : 0.07), in: Capsule())
+                        .contentShape(Capsule())
+                        .onLongPressGesture(minimumDuration: 3, maximumDistance: 35, pressing: { holding = $0 }, perform: { model.escape() })
+                        .accessibilityLabel("紧急解除，按住三秒；也可同时按住 Control Option Command Escape 三秒")
+                }
             }.foregroundStyle(.white).padding(.horizontal, 40)
         }
     }
@@ -112,10 +115,11 @@ final class CoverWindow: NSWindow {
         let d = UserDefaults.standard
         if d.double(forKey: "work") >= 60 { session.workDuration = d.double(forKey: "work") }
         if d.double(forKey: "rest") >= 60 { session.restDuration = d.double(forKey: "rest") }
+        model.emergencyUnlockDisabled = d.bool(forKey: "disableEmergencyUnlock")
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = NSImage(systemSymbolName: "leaf", accessibilityDescription: "歇一会")
         item.button?.imagePosition = .imageLeading
-        model.escape = { [weak self] in self?.endRest() }
+        model.escape = { [weak self] in self?.emergencyUnlock() }
         let center = NSWorkspace.shared.notificationCenter
         center.addObserver(self, selector: #selector(systemWillSleep), name: NSWorkspace.willSleepNotification, object: nil)
         center.addObserver(self, selector: #selector(systemDidWake), name: NSWorkspace.didWakeNotification, object: nil)
@@ -130,10 +134,7 @@ final class CoverWindow: NSWindow {
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged]) { [weak self] event in
             let swallow = MainActor.assumeIsolated {
                 guard let self, !self.windows.isEmpty else { return false }
-                let mods: NSEvent.ModifierFlags = [.control, .option, .command]
-                if event.type == .keyDown && event.keyCode == 53 && event.modifierFlags.contains(mods) {
-                    if self.holdStart == nil { self.holdStart = Date() }
-                } else if event.type == .keyUp || !event.modifierFlags.contains(mods) { self.holdStart = nil }
+                self.handleEmergencyKey(event)
                 return true
             }
             return swallow ? nil : event
@@ -145,6 +146,7 @@ final class CoverWindow: NSWindow {
         if CommandLine.arguments.contains("--music-check") { Task { await runMusicChecks() }; return }
         if CommandLine.arguments.contains("--viewing-check") { Task { await runViewingChecks() }; return }
         if CommandLine.arguments.contains("--pause-check") { runPauseChecks(); return }
+        if CommandLine.arguments.contains("--emergency-unlock-check") { runEmergencyUnlockChecks(); return }
         if smoke {
             isPreview = true; savedSession = session; smokeStarted = true
             session.beginRest(now: Date(), duration: 4); tick()
@@ -291,7 +293,8 @@ final class CoverWindow: NSWindow {
         if let asleep = snapshot.asleep { displaysSleeping = asleep }
         if let onConsole = snapshot.onConsole { sessionInactive = !onConsole }
         if suspended || locked { hideWarning(); hideViewingReminder() }
-        if let start = holdStart, now.timeIntervalSince(start) >= 3 { endRest(); return }
+        if model.emergencyUnlockDisabled { holdStart = nil }
+        if let start = holdStart, now.timeIntervalSince(start) >= 3 { emergencyUnlock(); return }
         if enabled || session.restEnd != nil {
             session.tick(now: now, active: !suspended && !locked, hasInput: idle < 2, idleDuration: idle)
             if !session.viewingMode && idle >= session.idleIndicatorDuration { hideWarning() }
@@ -344,6 +347,8 @@ final class CoverWindow: NSWindow {
         section("休息")
         _ = add("现在休息", #selector(restNow))
         _ = add("预览遮罩（10 秒）", #selector(preview))
+        let emergencyToggle = add("禁用紧急解锁", #selector(toggleEmergencyUnlock))
+        emergencyToggle.state = model.emergencyUnlockDisabled ? .on : .off
         section("时长设置")
         for (label, values, action, current) in [("连续使用", [25,45,60,90], #selector(setWork(_:)), session.workDuration), ("休息时长", [1,3,5,10], #selector(setRest(_:)), session.restDuration)] {
             let parent = add(label, nil); let child = NSMenu(); parent.submenu = child
@@ -368,6 +373,12 @@ final class CoverWindow: NSWindow {
     @objc func setWork(_ sender: NSMenuItem) { session.workDuration = Double(sender.tag * 60); session.reset(); warned = false; hideWarning(); hideViewingReminder(); UserDefaults.standard.set(session.workDuration, forKey: "work"); rebuildMenu() }
     @objc func setRest(_ sender: NSMenuItem) { session.restDuration = Double(sender.tag * 60); UserDefaults.standard.set(session.restDuration, forKey: "rest"); rebuildMenu() }
     @objc func toggleMusic() { music.enabled.toggle(); rebuildMenu() }
+    @objc func toggleEmergencyUnlock() {
+        model.emergencyUnlockDisabled.toggle()
+        holdStart = nil
+        UserDefaults.standard.set(model.emergencyUnlockDisabled, forKey: "disableEmergencyUnlock")
+        rebuildMenu()
+    }
     @objc func setMusicVolume(_ sender: NSMenuItem) { music.volume = Float(sender.tag) / 100; rebuildMenu() }
     @objc func showMusicCredits() { if let url = RestMusic.resource("Credits", extension: "txt") { NSWorkspace.shared.open(url) } }
     @objc func toggleViewingMode() {
@@ -418,6 +429,17 @@ final class CoverWindow: NSWindow {
         windows.first?.makeKeyAndOrderFront(nil)
     }
     func endRest() { session.reset(); cleanup(); if isPreview { restorePreview() }; warned = false; updateTimerInterval() }
+    func emergencyUnlock() {
+        guard !model.emergencyUnlockDisabled else { return }
+        endRest()
+    }
+    func handleEmergencyKey(_ event: NSEvent) {
+        guard !model.emergencyUnlockDisabled else { holdStart = nil; return }
+        let mods: NSEvent.ModifierFlags = [.control, .option, .command]
+        if event.type == .keyDown && event.keyCode == 53 && event.modifierFlags.contains(mods) {
+            if holdStart == nil { holdStart = currentTime() }
+        } else if event.type == .keyUp || !event.modifierFlags.contains(mods) { holdStart = nil }
+    }
     func cleanup() {
         hideViewingReminder()
         music.stop()
