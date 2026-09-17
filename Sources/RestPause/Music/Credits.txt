@@ -1,0 +1,29 @@
+休息音乐 / RestPause Music Credits
+
+Music by Kevin MacLeod (incompetech.com).
+Licensed under Creative Commons: By Attribution 4.0 License.
+https://creativecommons.org/licenses/by/4.0/
+
+Downloaded from the composer’s official website on 2026-09-16.
+Changes: converted from MP3 to AAC (160 kbps); loudness normalized to -23 LUFS.
+Complete tracks retained; playback volume and fades are applied at runtime.
+
+Clear Air — Kevin MacLeod
+Guitar, Piano
+https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100626
+Local file: clear-air.m4a
+
+Pepper's Theme — Kevin MacLeod
+Piano, Guitar, Bass, Flutes
+https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1400033
+Local file: peppers-theme.m4a
+
+Meditation Impromptu 01 — Kevin MacLeod
+Piano
+https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100163
+Local file: meditation-impromptu-01.m4a
+
+Avec Soin — Kevin MacLeod
+Piano
+https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100860
+Local file: avec-soin.m4a

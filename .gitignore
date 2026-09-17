@@ -1,0 +1,30 @@
+# Swift Package Manager and build output
+/.build/
+/.swiftpm/
+/build/
+/dist/
+DerivedData/
+
+# Xcode user-specific settings
+xcuserdata/
+*.xcuserstate
+
+# macOS metadata
+.DS_Store
+._*
+.AppleDouble
+.LSOverride
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+!.env.sample
+*.p12
+*.p8
+*.mobileprovision
+
+# Editor temporary files
+*.swp
+*.swo
+*~
