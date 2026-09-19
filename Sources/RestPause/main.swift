@@ -37,6 +37,7 @@ struct RestMessage: Equatable {
 
 @MainActor final class RestModel: ObservableObject {
     @Published var remaining = 0
+    @Published var currentTimeText = ""
     @Published var message = RestMessage.all[0]
     @Published var keepingAwake = false
     @Published var emergencyUnlockDisabled = false
@@ -71,6 +72,12 @@ struct RestView: View {
                         .accessibilityLabel("紧急解除，按住三秒；也可同时按住 Control Option Command Escape 三秒")
                 }
             }.foregroundStyle(.white).padding(.horizontal, 40)
+        }
+        .overlay(alignment: .topTrailing) {
+            Text(model.currentTimeText)
+                .font(.system(size: 28, weight: .light, design: .rounded))
+                .monospacedDigit().foregroundStyle(.white.opacity(0.8))
+                .padding(32)
         }
     }
 }
@@ -300,6 +307,8 @@ final class CoverWindow: NSWindow {
             if !session.viewingMode && idle >= session.idleIndicatorDuration { hideWarning() }
         }
         if let end = session.restEnd {
+            let currentTimeText = now.formatted(date: .omitted, time: .shortened)
+            if model.currentTimeText != currentTimeText { model.currentTimeText = currentTimeText }
             let remaining = max(0, Int(ceil(end.timeIntervalSince(now))))
             if model.remaining != remaining { model.remaining = remaining }
             if windows.isEmpty && !locked && !suspended { showRest() }
