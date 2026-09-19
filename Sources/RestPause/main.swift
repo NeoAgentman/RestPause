@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import IOKit.pwr_mgt
 import RestCore
+import ServiceManagement
 
 struct RestMessage: Equatable {
     let title: String
@@ -85,10 +86,17 @@ final class CoverWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 }
-@MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var session = Session()
     let model = RestModel()
     let music = RestMusic()
+    var focusLink = RestFocusLink()
+    var phoneLinkSettings = PhoneLinkSettings()
+    var loginItemSettings = LoginItemSettings()
+    var phoneLinkFailure: String?
+    var phoneLinkFailureReported = false
+    var terminating = false
+    let isChecking = CommandLine.arguments.contains { $0.hasSuffix("-check") }
     var item: NSStatusItem!
     var windows: [NSWindow] = []
     var timer: Timer?
@@ -119,6 +127,12 @@ final class CoverWindow: NSWindow {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        focusLink.enabled = phoneLinkSettings.enabled && !isChecking
+        phoneLinkSettings.onChange = { [weak self] in self?.phoneLinkSettingChanged() }
+        focusLink.onFailure = { [weak self] name in
+            guard let self, !self.phoneLinkFailureReported else { return }
+            self.phoneLinkFailure = name
+        }
         let d = UserDefaults.standard
         if d.double(forKey: "work") >= 60 { session.workDuration = d.double(forKey: "work") }
         if d.double(forKey: "rest") >= 60 { session.restDuration = d.double(forKey: "rest") }
@@ -149,6 +163,8 @@ final class CoverWindow: NSWindow {
         startTimer(interval: 1)
         rebuildMenu()
         if CommandLine.arguments.contains("--performance-check") { runPerformanceChecks(); return }
+        if CommandLine.arguments.contains("--focus-check") { Task { await runFocusChecks() }; return }
+        if CommandLine.arguments.contains("--settings-check") { Task { await runSettingsChecks() }; return }
         if CommandLine.arguments.contains("--activity-check") { runActivityChecks(); return }
         if CommandLine.arguments.contains("--music-check") { Task { await runMusicChecks() }; return }
         if CommandLine.arguments.contains("--viewing-check") { Task { await runViewingChecks() }; return }
@@ -156,7 +172,8 @@ final class CoverWindow: NSWindow {
         if CommandLine.arguments.contains("--emergency-unlock-check") { runEmergencyUnlockChecks(); return }
         if smoke {
             isPreview = true; savedSession = session; smokeStarted = true
-            session.beginRest(now: Date(), duration: 4); tick()
+            let duration = max(4, Double(ProcessInfo.processInfo.environment["RESTPAUSE_SMOKE_DURATION"] ?? "4") ?? 4)
+            session.beginRest(now: Date(), duration: duration); tick()
         } else if CommandLine.arguments.contains("--preview") { preview() }
     }
     func runActivityChecks() {
@@ -333,9 +350,15 @@ final class CoverWindow: NSWindow {
         let title = session.viewingMode ? " 观影 · \(status)" : " \(status)"
         // AppKit redraws the status item (and its display replicas) even for equal titles.
         if item.button?.title != title { item.button?.title = title }
+        if session.restEnd == nil && windows.isEmpty && !terminating && phoneLinkSettings.enabled,
+           let name = phoneLinkFailure {
+            phoneLinkFailure = nil; phoneLinkFailureReported = true
+            showPhoneLinkFailure(name)
+        }
     }
     func rebuildMenu() {
         let menu = NSMenu()
+        menu.autoenablesItems = false
         func add(_ title: String, _ action: Selector?) -> NSMenuItem {
             let m = NSMenuItem(title: title, action: action, keyEquivalent: ""); m.target = self; menu.addItem(m); return m
         }
@@ -375,9 +398,62 @@ final class CoverWindow: NSWindow {
             volumeMenu.addItem(option)
         }
         _ = add("音乐来源与署名", #selector(showMusicCredits))
+        section("设置")
+        let phoneLinkToggle = add("手机联动", #selector(togglePhoneLink))
+        phoneLinkToggle.state = phoneLinkSettings.enabled ? .on : .off
+        phoneLinkToggle.isEnabled = !phoneLinkSettings.checking
+        let loginToggle = add("开机启动", #selector(toggleLoginItem))
+        loginToggle.state = loginItemSettings.menuState
         menu.addItem(.separator())
         _ = add("退出歇一会", #selector(quit))
         item.menu = menu
+        menu.delegate = self
+    }
+    func menuWillOpen(_ menu: NSMenu) {
+        menu.items.first { $0.action == #selector(toggleLoginItem) }?.state = loginItemSettings.menuState
+        menu.items.first { $0.action == #selector(togglePhoneLink) }?.isEnabled = !phoneLinkSettings.checking
+    }
+    @objc func togglePhoneLink() { Task { await phoneLinkSettings.toggle() } }
+    func phoneLinkSettingChanged() {
+        focusLink.enabled = phoneLinkSettings.enabled && !isChecking
+        if !phoneLinkSettings.enabled {
+            focusLink.end()
+            phoneLinkFailure = nil
+        } else if !phoneLinkSettings.checking {
+            phoneLinkFailureReported = false
+            if let end = session.restEnd, !windows.isEmpty { focusLink.begin(until: end) }
+        }
+        rebuildMenu()
+    }
+    @objc func toggleLoginItem() {
+        do {
+            try loginItemSettings.toggle()
+            if loginItemSettings.state == .needsApproval {
+                let alert = NSAlert()
+                alert.messageText = "开机启动需要系统允许"
+                alert.informativeText = "请在系统设置的“通用 → 登录项”中允许“歇一会”启动。"
+                alert.addButton(withTitle: "打开登录项设置")
+                alert.addButton(withTitle: "稍后")
+                NSApp.activate(ignoringOtherApps: true)
+                if alert.runModal() == .alertFirstButtonReturn { SMAppService.openSystemSettingsLoginItems() }
+            }
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "无法更改开机启动"
+            alert.informativeText = "请从“应用程序”文件夹启动“歇一会”，并检查系统“通用 → 登录项”设置。\n\n" + error.localizedDescription
+            alert.addButton(withTitle: "好")
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+        }
+        rebuildMenu()
+    }
+    func showPhoneLinkFailure(_ name: String) {
+        let alert = NSAlert()
+        alert.messageText = "手机联动未能完成"
+        alert.informativeText = "快捷指令“\(name)”执行失败或超时。请检查两个快捷指令能否独立运行、是否选择了“歇一会”专注模式，以及两端是否已开启“在设备之间共享”。本机休息已正常结束。"
+        alert.addButton(withTitle: "好")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
     }
     @objc func setWork(_ sender: NSMenuItem) { session.workDuration = Double(sender.tag * 60); session.reset(); warned = false; hideWarning(); hideViewingReminder(); UserDefaults.standard.set(session.workDuration, forKey: "work"); rebuildMenu() }
     @objc func setRest(_ sender: NSMenuItem) { session.restDuration = Double(sender.tag * 60); UserDefaults.standard.set(session.restDuration, forKey: "rest"); rebuildMenu() }
@@ -408,6 +484,7 @@ final class CoverWindow: NSWindow {
     @objc func preview() { guard session.restEnd == nil else { return }; savedSession = session; isPreview = true; session.beginRest(now: Date(), duration: 10); tick() }
     func restorePreview() { if let saved = savedSession { session = saved }; savedSession = nil; isPreview = false }
     func showRest() {
+        phoneLinkFailureReported = false
         hideViewingReminder()
         hideWarning(); previousApp = NSWorkspace.shared.frontmostApplication
         oldPresentation = NSApp.presentationOptions
@@ -419,6 +496,7 @@ final class CoverWindow: NSWindow {
         NSApp.presentationOptions = [.hideDock, .hideMenuBar, .disableProcessSwitching, .disableHideApplication]
         makeWindows()
         music.start(remaining: session.restEnd?.timeIntervalSince(currentTime()) ?? 0)
+        if let end = session.restEnd { focusLink.begin(until: end) }
         if smoke {
             print("SMOKE coverage: screens=\(NSScreen.screens.count) windows=\(windows.count) awake=\(model.keepingAwake) musicPlaying=\(music.player?.isPlaying == true) track=\(music.currentTrack?.title ?? "none")")
             for (index, window) in windows.enumerated() { print("SMOKE window \(index): \(window.frame) visible=\(window.isVisible) level=\(window.level.rawValue)") }
@@ -450,6 +528,7 @@ final class CoverWindow: NSWindow {
         } else if event.type == .keyUp || !event.modifierFlags.contains(mods) { holdStart = nil }
     }
     func cleanup() {
+        focusLink.end()
         hideViewingReminder()
         music.stop()
         holdStart = nil
@@ -491,6 +570,16 @@ final class CoverWindow: NSWindow {
         warning = panel
     }
     func hideWarning() { warning?.orderOut(nil); warning = nil }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        terminating = true
+        cleanup()
+        guard focusLink.pending > 0 else { return .terminateNow }
+        Task {
+            await focusLink.finish()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
     func applicationWillTerminate(_ notification: Notification) { cleanup() }
 }
 let app = NSApplication.shared
