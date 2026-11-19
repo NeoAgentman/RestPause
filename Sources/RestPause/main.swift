@@ -62,7 +62,7 @@ struct RestView: View {
                     .font(.system(size: 88, weight: .ultraLight, design: .rounded)).monospacedDigit()
                 Text(model.message.detail).font(.system(size: 17)).foregroundStyle(.white.opacity(0.65))
                     .multilineTextAlignment(.center)
-                Text(model.keepingAwake ? "电脑保持运行，任务继续进行" : "任务继续进行；系统仍按原有电源设置运行")
+                Text(model.keepingAwake ? "屏幕保持常亮，音乐与任务继续进行" : "任务继续进行；系统仍按原有电源设置运行")
                     .font(.system(size: 13)).foregroundStyle(.white.opacity(0.4)).padding(.top, 14)
                 if !model.emergencyUnlockDisabled {
                     Text(holding ? "继续按住以紧急解除…" : "紧急解除 · 按住 3 秒")
@@ -490,7 +490,7 @@ final class CoverWindow: NSWindow {
         oldPresentation = NSApp.presentationOptions
         model.chooseMessage()
         var aid: IOPMAssertionID = 0
-        let result = IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleSystemSleep as CFString, IOPMAssertionLevel(kIOPMAssertionLevelOn), "RestPause: keep background work running during break" as CFString, &aid)
+        let result = IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleDisplaySleep as CFString, IOPMAssertionLevel(kIOPMAssertionLevelOn), "RestPause: keep display awake and music playing during break" as CFString, &aid)
         if result == kIOReturnSuccess { assertion = aid; model.keepingAwake = true } else { model.keepingAwake = false }
         NSApp.activate(ignoringOtherApps: true)
         NSApp.presentationOptions = [.hideDock, .hideMenuBar, .disableProcessSwitching, .disableHideApplication]
