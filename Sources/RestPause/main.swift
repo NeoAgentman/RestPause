@@ -324,7 +324,7 @@ final class CoverWindow: NSWindow {
             if !session.viewingMode && idle >= session.idleIndicatorDuration { hideWarning() }
         }
         if let end = session.restEnd {
-            let currentTimeText = now.formatted(date: .omitted, time: .shortened)
+            let currentTimeText = now.formatted(Date.FormatStyle(date: .omitted, time: .shortened, timeZone: TimeZone(secondsFromGMT: 8 * 3600)!))
             if model.currentTimeText != currentTimeText { model.currentTimeText = currentTimeText }
             let remaining = max(0, Int(ceil(end.timeIntervalSince(now))))
             if model.remaining != remaining { model.remaining = remaining }
